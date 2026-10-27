@@ -70,6 +70,8 @@ class Text:
 class Polyline:
     pts: List[Tuple[MM, MM]]
     width: MM = 0.6
+    allow_in: Tuple[str, ...] = ()
+    is_rail: bool = False
 
     def segments(self) -> List[Rect]:
         rects: List[Rect] = []
@@ -98,11 +100,11 @@ class Schematic:
         self.texts.append(t)
         return t
 
-    def add_line(self, pts: List[Tuple[MM, MM]], width: MM = 0.6) -> Polyline:
+    def add_line(self, pts: List[Tuple[MM, MM]], width: MM = 0.6, allow_in: Tuple[str, ...] = (), is_rail: bool = False) -> Polyline:
         # assert orthogonal segments only
         for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
             assert x1 == x2 or y1 == y2, "Non-orthogonal segment detected"
-        pl = Polyline(pts, width)
+        pl = Polyline(pts, width, allow_in, is_rail)
         self.lines.append(pl)
         return pl
 
@@ -148,6 +150,86 @@ class Schematic:
                 bb = b.bbox().expand(0.2)
                 assert not ab.intersects(bb), f"Text '{a.s}' overlaps '{b.s}'"
 
+        # Helper predicates
+        def point_on_rect_edge(px: MM, py: MM, r: Rect, tol: MM = 0.05) -> bool:
+            r = r.norm()
+            on_left = abs(px - r.x1) <= tol and (r.y1 - tol) <= py <= (r.y2 + tol)
+            on_right = abs(px - r.x2) <= tol and (r.y1 - tol) <= py <= (r.y2 + tol)
+            on_top = abs(py - r.y1) <= tol and (r.x1 - tol) <= px <= (r.x2 + tol)
+            on_bot = abs(py - r.y2) <= tol and (r.x1 - tol) <= px <= (r.x2 + tol)
+            return on_left or on_right or on_top or on_bot
+
+        def point_on_any_line(px: MM, py: MM, lines: List[Polyline], tol: MM = 0.1) -> bool:
+            for ln in lines:
+                for (x1, y1), (x2, y2) in zip(ln.pts, ln.pts[1:]):
+                    if x1 == x2:  # vertical
+                        if abs(px - x1) <= tol and min(y1, y2) - tol <= py <= max(y1, y2) + tol:
+                            return True
+                    elif y1 == y2:  # horizontal
+                        if abs(py - y1) <= tol and min(x1, x2) - tol <= px <= max(x1, x2) + tol:
+                            return True
+            return False
+
+        def seg_overlaps_rect_edge(x1, y1, x2, y2, r: Rect, tol: MM = 0.05) -> bool:
+            r = r.norm()
+            if y1 == y2:  # horizontal
+                y = y1
+                # overlapping along top or bottom?
+                if abs(y - r.y1) <= tol or abs(y - r.y2) <= tol:
+                    a, b = sorted((x1, x2))
+                    return not (b <= r.x1 or a >= r.x2)
+            if x1 == x2:  # vertical
+                x = x1
+                if abs(x - r.x1) <= tol or abs(x - r.x2) <= tol:
+                    a, b = sorted((y1, y2))
+                    return not (b <= r.y1 or a >= r.y2)
+            return False
+
+        def seg_crosses_rect_interior(x1, y1, x2, y2, r: Rect) -> bool:
+            r = r.norm()
+            # horizontal segment inside vertical bounds and spanning across interior
+            if y1 == y2:
+                y = y1
+                if r.y1 < y < r.y2:
+                    a, b = sorted((x1, x2))
+                    return a < r.x2 and b > r.x1 and not (b <= r.x1 or a >= r.x2)
+            # vertical segment
+            if x1 == x2:
+                x = x1
+                if r.x1 < x < r.x2:
+                    a, b = sorted((y1, y2))
+                    return a < r.y2 and b > r.y1 and not (b <= r.y1 or a >= r.y2)
+            return False
+
+        # Endpoint attachments: every line endpoint must touch a rect edge or another line
+        for i, ln in enumerate(self.lines):
+            if ln.is_rail:
+                continue
+            for px, py in (ln.pts[0], ln.pts[-1]):
+                attached = any(point_on_rect_edge(px, py, r) for r in self.rects)
+                attached = attached or point_on_any_line(px, py, [l for l in self.lines if l is not ln])
+                if not attached:
+                    print(f"DEBUG line {i} pts={ln.pts}")
+                    for ridx, r in enumerate(self.rects):
+                        if point_on_rect_edge(px, py, r):
+                            print(f"  endpoint on rect {r.name}")
+                    for j, l2 in enumerate(self.lines):
+                        if l2 is ln:
+                            continue
+                        if point_on_any_line(px, py, [l2]):
+                            print(f"  endpoint on line {j}")
+                assert attached, f"Wire endpoint {px:.2f},{py:.2f} (line {i}) not attached to block edge or another wire"
+
+        # No wire rides along a rectangle edge; and no wire crosses interiors
+        for li, ln in enumerate(self.lines):
+            for (x1, y1), (x2, y2) in zip(ln.pts, ln.pts[1:]):
+                for r in self.rects:
+                    if r.name not in ln.allow_in:
+                        if seg_crosses_rect_interior(x1, y1, x2, y2, r):
+                            print(f"DEBUG cross interior: line {li} seg=({x1},{y1})->({x2},{y2}) rect={r.name}")
+                            raise AssertionError(f"Wire crosses {r.name} interior")
+                    assert not seg_overlaps_rect_edge(x1, y1, x2, y2, r), f"Wire overlaps {r.name} edge"
+
     def to_kicad(self) -> str:
         out: List[str] = []
         out.append('(kicad_sch (version 20230121) (generator eeschema)')
@@ -191,59 +273,69 @@ def main():
     sch.add_text("RC Servo", servo.x1 + 4, servo.y1 + 8, 5.0, 5.0)
     sch.add_text("Potentiometer", pot.x1 + 22, pot.y1 + 12, 3.0, 3.0)
     sch.add_text("Limit wiper 0–3.3V", pot.x1 + 22, pot.y1 + 20, 3.0, 3.0)
-    sch.add_text("LED bank: scaled pot value (LED_BANK1–3)", uio.x1 + 2, uio.y1 + 28, 3.0, 3.0)
+    sch.add_text("LED bank: scaled pot value (LED_BANK1–3)", uio.x1 + 6, uio.y1 + 28, 3.0, 3.0)
 
     # Breadboard rails inside
     rail_x1, rail_x2 = bb.x1 + 5, bb.x2 - 5
     rail_5v_y, rail_gnd_y = bb.y1 + 15, bb.y1 + 25
-    sch.add_line([(rail_x1, rail_5v_y), (rail_x2, rail_5v_y)], width=0.8)
-    sch.add_text("5V rail", rail_x1 + 2, rail_5v_y - 2.5, 3.0, 3.0)
-    sch.add_line([(rail_x1, rail_gnd_y), (rail_x2, rail_gnd_y)], width=0.8)
-    sch.add_text("GND rail", rail_x1 + 2, rail_gnd_y + 5.5, 3.0, 3.0)
+    sch.add_line([(rail_x1, rail_5v_y), (rail_x2, rail_5v_y)], width=0.8, allow_in=("Breadboard",), is_rail=True)
+    sch.add_text("BB 5V rail", rail_x1 + 2, rail_5v_y - 2.5, 3.0, 3.0)
+    sch.add_line([(rail_x1, rail_gnd_y), (rail_x2, rail_gnd_y)], width=0.8, allow_in=("Breadboard",), is_rail=True)
+    sch.add_text("BB GND rail", rail_x1 + 2, rail_gnd_y + 5.5, 3.0, 3.0)
 
     # Pot ends to rails (vertical taps inside breadboard)
     # Top of pot to 5V rail
-    sch.add_line([(pot.x1 + 5, pot.y1), (pot.x1 + 5, rail_5v_y)], width=0.6)
-    # Bottom of pot to GND rail
-    sch.add_line([(pot.x1 + 5, pot.y2), (pot.x1 + 5, rail_gnd_y)], width=0.6)
+    # Two short vertical taps from rails into pot top edge
+    tap1x = pot.x1 + 8
+    tap2x = pot.x1 + 40
+    sch.add_line([(tap1x, rail_5v_y), (tap1x, pot.y1)], width=0.6, allow_in=("Breadboard",))
+    sch.add_line([(tap2x, rail_gnd_y), (tap2x, pot.y1)], width=0.6, allow_in=("Breadboard",))
 
     # ATX -> UNO power (12V at y=50, GND at y=60), entirely between blocks
     y12, yg = atx.y1 + 20, atx.y1 + 30
     sch.add_line([(atx.x2, y12), (upwr.x1, y12)], width=0.6)
     sch.add_text("12V", (atx.x2 + upwr.x1) / 2 - 5, y12 - 3.0, 3.0, 3.0)
+    # GND from ATX to UNO power
     sch.add_line([(atx.x2, yg), (upwr.x1, yg)], width=0.6)
     sch.add_text("GND", (atx.x2 + upwr.x1) / 2 - 6, yg + 4.0, 3.0, 3.0)
 
     # ATX -> Breadboard rails (5V path: under top row then up to 5V rail)
     y_5v_bus = upwr.y2 + 5
-    sch.add_line([(atx.x2, y_5v_bus), (bb.x1 - 10, y_5v_bus), (bb.x1 - 10, rail_5v_y), (rail_x1, rail_5v_y)], width=0.6)
-    sch.add_text("5V (regulated)", atx.x2 + 10, y_5v_bus - 3.0, 3.0, 3.0)
+    sch.add_line([(atx.x2, atx.y2 - 10), (atx.x2 + 5, atx.y2 - 10), (atx.x2 + 5, y_5v_bus), (bb.x1 - 10, y_5v_bus), (bb.x1 - 10, rail_5v_y), (rail_x1, rail_5v_y)], width=0.6, allow_in=("Breadboard",))
+    sch.add_text("5V (regulated)", bb.x2 - 40, rail_5v_y + 6.0, 3.0, 3.0)
     # ATX GND -> GND rail
     y_gnd_bus = y_5v_bus + 10
-    sch.add_line([(atx.x2, y_gnd_bus), (bb.x1 - 15, y_gnd_bus), (bb.x1 - 15, rail_gnd_y), (rail_x1, rail_gnd_y)], width=0.6)
-    sch.add_text("GND to rails", atx.x2 + 10, y_gnd_bus + 4.0, 3.0, 3.0)
+    sch.add_line([(atx.x2, atx.y2 - 5), (atx.x2 + 5, atx.y2 - 5), (atx.x2 + 5, y_gnd_bus), (bb.x1 - 15, y_gnd_bus), (bb.x1 - 15, rail_gnd_y), (rail_x1, rail_gnd_y)], width=0.6, allow_in=("Breadboard",))
+    sch.add_text("GND to rails", bb.x2 - 40, rail_gnd_y + 12.0, 3.0, 3.0)
 
     # UNO power -> UNO IO (power feed)
-    sch.add_line([(upwr.x2 - 10, upwr.y2), (upwr.x2 - 10, uio.y1 - 10), (uio.x2, uio.y1 - 10), (uio.x2, uio.y1)], width=0.6)
-    sch.add_text("Power", uio.x2 - 25, uio.y1 - 13, 3.0, 3.0)
+    # Route down the left side, clear of breadboard
+    x_bus = upwr.x1 - 10
+    # drop a bit then go left, then down, then right into IO top edge
+    sch.add_line([((upwr.x1 + upwr.x2) / 2, upwr.y2), ((upwr.x1 + upwr.x2) / 2, upwr.y2 + 4), (x_bus, upwr.y2 + 4), (x_bus, uio.y1 - 8), (uio.x2, uio.y1 - 8), (uio.x2, uio.y1)], width=0.6)
+    sch.add_text("Power", x_bus + 2, (upwr.y2 + 4 + uio.y1 - 8) / 2, 3.0, 3.0)
 
     # Pot wiper → UNO IO W03 (from pot mid to below breadboard then left to IO right)
-    wiper = (pot.x1 + 30, (pot.y1 + pot.y2) / 2)
-    y_wiper_bus = bb.y2 + 10
-    sch.add_line([(wiper[0], wiper[1]), (wiper[0], y_wiper_bus), (uio.x2 + 10, y_wiper_bus), (uio.x2 + 10, uio.y1 + 20), (uio.x2, uio.y1 + 20)], width=0.6)
-    sch.add_text("W03 — Analog input 0–3.3V (AD_PORTW3)", uio.x2 + 12, y_wiper_bus - 2.0, 3.0, 3.0)
+    wiper_y = (pot.y1 + pot.y2) / 2
+    wiper_x = (tap1x + tap2x) / 2
+    # Wiper exits pot at right edge, jog around pot perimeter to breadboard left edge, then to IO
+    sch.add_line([(pot.x2, wiper_y), (pot.x2 + 5, wiper_y), (pot.x2 + 5, bb.y2 - 5), (bb.x1 - 1, bb.y2 - 5), (bb.x1 - 1, bb.y2 + 8), (bb.x1, bb.y2 + 8), (uio.x2 + 10, bb.y2 + 8), (uio.x2 + 10, uio.y1 + 22), (uio.x2, uio.y1 + 22)], width=0.6, allow_in=("Breadboard",))
+    sch.add_text("W03 — Analog input 0–3.3V (AD_PORTW3)", uio.x2 + 20, bb.y2 + 16, 3.0, 3.0)
 
     # UNO IO Y06 → Servo signal (below breadboard, then up into servo)
-    y_sig = uio.y1 + 40
-    sch.add_line([(uio.x2, y_sig), (servo.x1 - 15, y_sig), (servo.x1 - 15, servo.y1 + 30), (servo.x1, servo.y1 + 30)], width=0.6)
+    y_sig = uio.y1 + 42
+    sch.add_line([(uio.x2, y_sig), (servo.x1 - 18, y_sig), (servo.x1 - 18, servo.y1 + 30), (servo.x1, servo.y1 + 30)], width=0.6)
     sch.add_text("Y06 — Digital output 0–3.3V (RC_PORTY06, Timer4)", uio.x2 + 2, y_sig - 2.0, 3.0, 3.0)
     sch.add_text("RC servo pulse ~1–2 ms, 50 ms period", uio.x2 + 2, y_sig + 6.0, 3.0, 3.0)
 
     # Rails -> Servo (5V and GND)
-    sch.add_line([(rail_x2, rail_5v_y), (servo.x1 - 10, rail_5v_y), (servo.x1 - 10, servo.y1 + 15), (servo.x1, servo.y1 + 15)], width=0.6)
-    sch.add_text("5V to servo (+)", servo.x1 - 55, rail_5v_y - 2.0, 3.0, 3.0)
-    sch.add_line([(rail_x2, rail_gnd_y), (servo.x1 - 20, rail_gnd_y), (servo.x1 - 20, servo.y1 + 40), (servo.x1, servo.y1 + 40)], width=0.6)
-    sch.add_text("GND to servo (−)", servo.x1 - 65, rail_gnd_y + 4.0, 3.0, 3.0)
+    # exit from rail ends at breadboard right edge
+    sch.add_line([(rail_x2, rail_5v_y), (bb.x2, rail_5v_y), (bb.x2 + 8, rail_5v_y), (bb.x2 + 8, servo.y1 + 15), (servo.x1, servo.y1 + 15)], width=0.6, allow_in=("Breadboard",))
+    sch.add_text("5V (orange) — max 5V, regulated", servo.x1 + 2, servo.y1 + 15 - 2, 3.0, 3.0)
+    sch.add_line([(rail_x2, rail_gnd_y), (bb.x2, rail_gnd_y), (bb.x2 + 16, rail_gnd_y), (bb.x2 + 16, servo.y1 + 40), (servo.x1, servo.y1 + 40)], width=0.6, allow_in=("Breadboard",))
+    sch.add_text("GND (brown)", servo.x1 + 2, servo.y1 + 40 - 2, 3.0, 3.0)
+    # Servo entry labels at pins
+    sch.add_text("Signal (yellow)", servo.x1 + 2, servo.y1 + 30 - 2, 3.0, 3.0)
 
     sch.add_text("Common ground for ATX, UNO boards, rails, and servo", 25, 285, 3.0, 3.0)
 
