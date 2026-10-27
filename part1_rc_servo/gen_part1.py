@@ -238,7 +238,7 @@ class Schematic:
         out.append('  (title_block')
         out.append('    (title "ECE118 Lab 3 — Part 1: Driving an RC Servo (Block Diagram)")')
         out.append('    (company "UCSC ECE118 — Student: Amber")')
-        out.append('    (rev "C")')
+        out.append('    (rev "E")')
         out.append('  )')
         # Rectangles
         for r in self.rects:
@@ -301,12 +301,12 @@ def main():
 
     # ATX -> Breadboard rails (5V path: under top row then up to 5V rail)
     y_5v_bus = upwr.y2 + 5
-    sch.add_line([(atx.x2, atx.y2 - 10), (atx.x2 + 5, atx.y2 - 10), (atx.x2 + 5, y_5v_bus), (bb.x1 - 10, y_5v_bus), (bb.x1 - 10, rail_5v_y), (rail_x1, rail_5v_y)], width=0.6, allow_in=("Breadboard",))
-    sch.add_text("5V (regulated)", bb.x2 - 40, rail_5v_y + 6.0, 3.0, 3.0)
+    sch.add_line([(atx.x2, atx.y2 - 10), (atx.x2 + 10, atx.y2 - 10), (atx.x2 + 10, y_5v_bus), (bb.x1 - 12, y_5v_bus), (bb.x1 - 12, rail_5v_y), (rail_x1, rail_5v_y)], width=0.6, allow_in=("Breadboard",))
+    sch.add_text("5V (regulated)", atx.x1 + 5, y_5v_bus - 8.0, 3.0, 3.0)
     # ATX GND -> GND rail
     y_gnd_bus = y_5v_bus + 10
-    sch.add_line([(atx.x2, atx.y2 - 5), (atx.x2 + 5, atx.y2 - 5), (atx.x2 + 5, y_gnd_bus), (bb.x1 - 15, y_gnd_bus), (bb.x1 - 15, rail_gnd_y), (rail_x1, rail_gnd_y)], width=0.6, allow_in=("Breadboard",))
-    sch.add_text("GND to rails", bb.x2 - 40, rail_gnd_y + 12.0, 3.0, 3.0)
+    sch.add_line([(atx.x2, atx.y2 - 5), (atx.x2 + 16, atx.y2 - 5), (atx.x2 + 16, y_gnd_bus), (bb.x1 - 18, y_gnd_bus), (bb.x1 - 18, rail_gnd_y), (rail_x1, rail_gnd_y)], width=0.6, allow_in=("Breadboard",))
+    sch.add_text("GND to rails", atx.x1 + 5, y_gnd_bus + 8.0, 3.0, 3.0)
 
     # UNO power -> UNO IO (power feed)
     # Route down the left side, clear of breadboard
@@ -318,24 +318,31 @@ def main():
     # Pot wiper → UNO IO W03 (from pot mid to below breadboard then left to IO right)
     wiper_y = (pot.y1 + pot.y2) / 2
     wiper_x = (tap1x + tap2x) / 2
-    # Wiper exits pot at right edge, jog around pot perimeter to breadboard left edge, then to IO
-    sch.add_line([(pot.x2, wiper_y), (pot.x2 + 5, wiper_y), (pot.x2 + 5, bb.y2 - 5), (bb.x1 - 1, bb.y2 - 5), (bb.x1 - 1, bb.y2 + 8), (bb.x1, bb.y2 + 8), (uio.x2 + 10, bb.y2 + 8), (uio.x2 + 10, uio.y1 + 22), (uio.x2, uio.y1 + 22)], width=0.6, allow_in=("Breadboard",))
+    # Wiper exits pot straight down through breadboard bottom, then routes left in open space to W03
+    y_wiper_out = bb.y2 + 8
+    sch.add_line([(pot.x1 + 30, pot.y2), (pot.x1 + 30, y_wiper_out), (uio.x2 + 10, y_wiper_out), (uio.x2 + 10, uio.y1 + 22), (uio.x2, uio.y1 + 22)], width=0.6, allow_in=("Breadboard","Pot"))
     sch.add_text("W03 — Analog input 0–3.3V (AD_PORTW3)", uio.x2 + 20, bb.y2 + 16, 3.0, 3.0)
 
     # UNO IO Y06 → Servo signal (below breadboard, then up into servo)
-    y_sig = uio.y1 + 42
-    sch.add_line([(uio.x2, y_sig), (servo.x1 - 18, y_sig), (servo.x1 - 18, servo.y1 + 30), (servo.x1, servo.y1 + 30)], width=0.6)
-    sch.add_text("Y06 — Digital output 0–3.3V (RC_PORTY06, Timer4)", uio.x2 + 2, y_sig - 2.0, 3.0, 3.0)
-    sch.add_text("RC servo pulse ~1–2 ms, 50 ms period", uio.x2 + 2, y_sig + 6.0, 3.0, 3.0)
+    # Servo entry y-positions (top to bottom: 5V, GND, Signal)
+    y_servo_5v = servo.y1 + 12
+    y_servo_gnd = servo.y1 + 30
+    y_servo_sig = servo.y1 + 48
+    # Y06 enters at bottom Signal pin from below without crossing power wires
+    y_sig = bb.y2 + 12
+    sch.add_line([(uio.x2, y_sig), (servo.x1 - 18, y_sig), (servo.x1 - 18, y_servo_sig), (servo.x1, y_servo_sig)], width=0.6)
+    sch.add_text("Y06 — Digital output 0–3.3V (RC_PORTY06, Timer4)", uio.x2 + 2, y_sig - 10.0, 3.0, 3.0)
+    sch.add_text("RC servo pulse ~1–2 ms, 50 ms period", servo.x1 + 2, servo.y2 + 6.0, 3.0, 3.0)
 
     # Rails -> Servo (5V and GND)
     # exit from rail ends at breadboard right edge
-    sch.add_line([(rail_x2, rail_5v_y), (bb.x2, rail_5v_y), (bb.x2 + 8, rail_5v_y), (bb.x2 + 8, servo.y1 + 15), (servo.x1, servo.y1 + 15)], width=0.6, allow_in=("Breadboard",))
-    sch.add_text("5V (orange) — max 5V, regulated", servo.x1 + 2, servo.y1 + 15 - 2, 3.0, 3.0)
-    sch.add_line([(rail_x2, rail_gnd_y), (bb.x2, rail_gnd_y), (bb.x2 + 16, rail_gnd_y), (bb.x2 + 16, servo.y1 + 40), (servo.x1, servo.y1 + 40)], width=0.6, allow_in=("Breadboard",))
-    sch.add_text("GND (brown)", servo.x1 + 2, servo.y1 + 40 - 2, 3.0, 3.0)
+    # 5V and GND from rail ends directly into their pins with no crossing
+    sch.add_line([(rail_x2, rail_5v_y), (bb.x2, rail_5v_y), (bb.x2 + 8, rail_5v_y), (bb.x2 + 8, y_servo_5v), (servo.x1, y_servo_5v)], width=0.6, allow_in=("Breadboard",))
+    sch.add_text("5V (orange) — max 5V, regulated", servo.x1 + 2, y_servo_5v + 6, 3.0, 3.0)
+    sch.add_line([(rail_x2, rail_gnd_y), (bb.x2, rail_gnd_y), (bb.x2 + 16, rail_gnd_y), (bb.x2 + 16, y_servo_gnd), (servo.x1, y_servo_gnd)], width=0.6, allow_in=("Breadboard",))
+    sch.add_text("GND (brown)", servo.x1 + 2, y_servo_gnd - 2, 3.0, 3.0)
     # Servo entry labels at pins
-    sch.add_text("Signal (yellow)", servo.x1 + 2, servo.y1 + 30 - 2, 3.0, 3.0)
+    sch.add_text("Signal (yellow)", servo.x1 + 2, y_servo_sig - 2, 3.0, 3.0)
 
     sch.add_text("Common ground for ATX, UNO boards, rails, and servo", 25, 285, 3.0, 3.0)
 
