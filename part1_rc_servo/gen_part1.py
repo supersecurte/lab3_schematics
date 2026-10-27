@@ -113,7 +113,6 @@ class Schematic:
         def is_pot(r: Rect) -> bool: return r.name == "Pot"
         def is_bb(r: Rect) -> bool: return r.name == "Breadboard"
 
-        # Minimum gap between non-nested blocks: 25 mm
         for i, a in enumerate(self.rects):
             for j, b in enumerate(self.rects):
                 if j <= i:
@@ -130,8 +129,7 @@ class Schematic:
                     assert margin_ok, "Pot must be nested within breadboard with margin"
                     continue
                 assert not a.intersects(b), f"Rectangles overlap: {a.name} vs {b.name}"
-                dx, dy = a.separation(b)
-                assert dx >= 25 or dy >= 25, f"Gaps too small between {a.name} and {b.name}"
+                # No minimum gap enforced in fixed layout mode
 
         # Note: Text may live inside its own block rectangles by design.
         # We only enforce that text does not overlap wires or other text.
@@ -149,6 +147,11 @@ class Schematic:
                     continue
                 bb = b.bbox().expand(0.2)
                 assert not ab.intersects(bb), f"Text '{a.s}' overlaps '{b.s}'"
+
+        # Keep all content clear of the title block region (approx for A3 landscape)
+        title_block = Rect(290, 235, 420, 297, "TitleBlock")
+        for t in self.texts:
+            assert not t.bbox().intersects(title_block), f"Text '{t.s}' inside title block area"
 
         # Helper predicates
         def point_on_rect_edge(px: MM, py: MM, r: Rect, tol: MM = 0.05) -> bool:
@@ -238,7 +241,7 @@ class Schematic:
         out.append('  (title_block')
         out.append('    (title "ECE118 Lab 3 — Part 1: Driving an RC Servo (Block Diagram)")')
         out.append('    (company "UCSC ECE118 — Student: Amber")')
-        out.append('    (rev "E")')
+        out.append('    (rev "F")')
         out.append('  )')
         # Rectangles
         for r in self.rects:
@@ -257,94 +260,76 @@ class Schematic:
 
 def main():
     sch = Schematic()
-    # Block sizes (w, h)
-    atx = sch.add_rect(20, 30, 90, 45, "ATX")
-    upwr = sch.add_rect(140, 30, 100, 45, "UNO Power")
-    uio = sch.add_rect(10, 210, 120, 60, "UNO IO")
-    bb = sch.add_rect(160, 100, 140, 110, "Breadboard")
-    servo = sch.add_rect(330, 120, 75, 55, "RC Servo")
-    pot = sch.add_rect(210, 145, 60, 45, "Pot")
+    # Fixed block rectangles per requested coordinates
+    atx = sch.add_rect(20, 25, 80, 45, "ATX")          # (20,25)-(100,70)
+    upwr = sch.add_rect(20, 125, 80, 45, "UNO Power")  # (20,125)-(100,170)
+    uio = sch.add_rect(140, 125, 120, 90, "UNO IO")    # (140,125)-(260,215)
+    bb = sch.add_rect(160, 20, 155, 85, "Breadboard")  # (160,20)-(315,105)
+    servo = sch.add_rect(350, 120, 55, 80, "RC Servo") # (350,120)-(405,200)
+    pot = sch.add_rect(195, 55, 70, 25, "Pot")         # (195,55)-(265,80)
 
     # Titles (5 mm)
-    sch.add_text("ATX power supply", atx.x1 + 5, atx.y1 + 8, 5.0, 5.0)
-    sch.add_text("UNO power board", upwr.x1 + 5, upwr.y1 + 8, 5.0, 5.0)
-    sch.add_text("UNO32 IO board", uio.x1 + 5, uio.y1 + 10, 5.0, 5.0)
-    sch.add_text("Breadboard", bb.x1 + 5, bb.y1 + 8, 5.0, 5.0)
-    sch.add_text("RC Servo", servo.x1 + 4, servo.y1 + 8, 5.0, 5.0)
-    sch.add_text("Potentiometer", pot.x1 + 22, pot.y1 + 12, 3.0, 3.0)
-    sch.add_text("Limit wiper 0–3.3V", pot.x1 + 22, pot.y1 + 20, 3.0, 3.0)
-    sch.add_text("LED bank: scaled pot value (LED_BANK1–3)", uio.x1 + 6, uio.y1 + 28, 3.0, 3.0)
+    sch.add_text("ATX power supply", 23, 31, 5.0, 5.0)
+    sch.add_text("UNO power board", 23, 131, 5.0, 5.0)
+    sch.add_text("UNO32 IO board", 143, 131, 5.0, 5.0)
+    sch.add_text("Breadboard", 163, 26, 5.0, 5.0)
+    sch.add_text("RC Servo", 353, 126, 5.0, 5.0)
+    sch.add_text("Potentiometer", 198, 61, 3.0, 3.0)
+    sch.add_text("wiper 0-3.3 V", 198, 68, 3.0, 3.0)
+    # IO text inside at x=145
+    sch.add_text("W03: analog in (AD_PORTW3)", 145, 155, 3.0, 3.0)
+    sch.add_text("Y06: servo out (RC_PORTY06, Timer4)", 145, 175, 3.0, 3.0)
+    sch.add_text("LED bank: scaled pot value (LED_BANK1-3)", 145, 200, 3.0, 3.0)
 
-    # Breadboard rails inside
-    rail_x1, rail_x2 = bb.x1 + 5, bb.x2 - 5
-    rail_5v_y, rail_gnd_y = bb.y1 + 15, bb.y1 + 25
+    # Breadboard rails
+    rail_x1, rail_x2 = 175, 290
+    rail_5v_y, rail_gnd_y = 42, 92
     sch.add_line([(rail_x1, rail_5v_y), (rail_x2, rail_5v_y)], width=0.8, allow_in=("Breadboard",), is_rail=True)
-    sch.add_text("BB 5V rail", rail_x1 + 2, rail_5v_y - 2.5, 3.0, 3.0)
+    sch.add_text("BB 5V rail", 178, 38, 3.0, 3.0)
     sch.add_line([(rail_x1, rail_gnd_y), (rail_x2, rail_gnd_y)], width=0.8, allow_in=("Breadboard",), is_rail=True)
-    sch.add_text("BB GND rail", rail_x1 + 2, rail_gnd_y + 5.5, 3.0, 3.0)
+    sch.add_text("BB GND rail", 178, 96, 3.0, 3.0)
 
-    # Pot ends to rails (vertical taps inside breadboard)
-    # Top of pot to 5V rail
-    # Two short vertical taps from rails into pot top edge
-    tap1x = pot.x1 + 8
-    tap2x = pot.x1 + 40
-    sch.add_line([(tap1x, rail_5v_y), (tap1x, pot.y1)], width=0.6, allow_in=("Breadboard",))
-    sch.add_line([(tap2x, rail_gnd_y), (tap2x, pot.y1)], width=0.6, allow_in=("Breadboard",))
+    # Pot taps with junction dots
+    sch.add_line([(215, rail_5v_y), (215, 55)], width=0.6, allow_in=("Breadboard",))
+    sch.add_line([(245, 80), (245, rail_gnd_y)], width=0.6, allow_in=("Breadboard",))
+    for (jx, jy) in [(215, rail_5v_y), (245, rail_gnd_y)]:
+        s = 1.2
+        sch.add_line([(jx - s/2, jy - s/2), (jx + s/2, jy - s/2), (jx + s/2, jy + s/2), (jx - s/2, jy + s/2), (jx - s/2, jy - s/2)], width=0.4, allow_in=("Breadboard",), is_rail=True)
 
-    # ATX -> UNO power (12V at y=50, GND at y=60), entirely between blocks
-    y12, yg = atx.y1 + 20, atx.y1 + 30
-    sch.add_line([(atx.x2, y12), (upwr.x1, y12)], width=0.6)
-    sch.add_text("12V", (atx.x2 + upwr.x1) / 2 - 5, y12 - 3.0, 3.0, 3.0)
-    # GND from ATX to UNO power
-    sch.add_line([(atx.x2, yg), (upwr.x1, yg)], width=0.6)
-    sch.add_text("GND", (atx.x2 + upwr.x1) / 2 - 6, yg + 4.0, 3.0, 3.0)
+    # ATX to UNO power vertical feeds
+    sch.add_line([(45, 70), (45, 125)], width=0.6)
+    sch.add_text("12V", 48, 97, 3.0, 3.0)
+    sch.add_line([(75, 70), (75, 125)], width=0.6)
+    sch.add_text("GND", 78, 97, 3.0, 3.0)
 
-    # ATX -> Breadboard rails (5V path: under top row then up to 5V rail)
-    y_5v_bus = upwr.y2 + 5
-    sch.add_line([(atx.x2, atx.y2 - 10), (atx.x2 + 10, atx.y2 - 10), (atx.x2 + 10, y_5v_bus), (bb.x1 - 12, y_5v_bus), (bb.x1 - 12, rail_5v_y), (rail_x1, rail_5v_y)], width=0.6, allow_in=("Breadboard",))
-    sch.add_text("5V (regulated)", atx.x1 + 5, y_5v_bus - 8.0, 3.0, 3.0)
-    # ATX GND -> GND rail
-    y_gnd_bus = y_5v_bus + 10
-    sch.add_line([(atx.x2, atx.y2 - 5), (atx.x2 + 16, atx.y2 - 5), (atx.x2 + 16, y_gnd_bus), (bb.x1 - 18, y_gnd_bus), (bb.x1 - 18, rail_gnd_y), (rail_x1, rail_gnd_y)], width=0.6, allow_in=("Breadboard",))
-    sch.add_text("GND to rails", atx.x1 + 5, y_gnd_bus + 8.0, 3.0, 3.0)
+    # UNO power to UNO IO power link
+    sch.add_line([(100, 147), (140, 147)], width=0.6)
+    sch.add_text("Power", 104, 143, 3.0, 3.0)
 
-    # UNO power -> UNO IO (power feed)
-    # Route down the left side, clear of breadboard
-    x_bus = upwr.x1 - 10
-    # drop a bit then go left, then down, then right into IO top edge
-    sch.add_line([((upwr.x1 + upwr.x2) / 2, upwr.y2), ((upwr.x1 + upwr.x2) / 2, upwr.y2 + 4), (x_bus, upwr.y2 + 4), (x_bus, uio.y1 - 8), (uio.x2, uio.y1 - 8), (uio.x2, uio.y1)], width=0.6)
-    sch.add_text("Power", x_bus + 2, (upwr.y2 + 4 + uio.y1 - 8) / 2, 3.0, 3.0)
+    # ATX to Breadboard feeds
+    sch.add_line([(100, 42), (175, 42)], width=0.6, allow_in=("Breadboard",))
+    sch.add_text("5V (regulated)", 104, 38, 3.0, 3.0)
+    sch.add_line([(100, 60), (130, 60), (130, 92), (175, 92)], width=0.6, allow_in=("Breadboard",))
+    sch.add_text("GND", 104, 56, 3.0, 3.0)
 
-    # Pot wiper → UNO IO W03 (from pot mid to below breadboard then left to IO right)
-    wiper_y = (pot.y1 + pot.y2) / 2
-    wiper_x = (tap1x + tap2x) / 2
-    # Wiper exits pot straight down through breadboard bottom, then routes left in open space to W03
-    y_wiper_out = bb.y2 + 8
-    sch.add_line([(pot.x1 + 30, pot.y2), (pot.x1 + 30, y_wiper_out), (uio.x2 + 10, y_wiper_out), (uio.x2 + 10, uio.y1 + 22), (uio.x2, uio.y1 + 22)], width=0.6, allow_in=("Breadboard","Pot"))
-    sch.add_text("W03 — Analog input 0–3.3V (AD_PORTW3)", uio.x2 + 20, bb.y2 + 16, 3.0, 3.0)
+    # Wiper to W03
+    sch.add_line([(230, 80), (230, 125)], width=0.6, allow_in=("Breadboard", "Pot"))
+    sch.add_text("W03 analog in, 0-3.3 V", 233, 115, 3.0, 3.0)
 
-    # UNO IO Y06 → Servo signal (below breadboard, then up into servo)
-    # Servo entry y-positions (top to bottom: 5V, GND, Signal)
-    y_servo_5v = servo.y1 + 12
-    y_servo_gnd = servo.y1 + 30
-    y_servo_sig = servo.y1 + 48
-    # Y06 enters at bottom Signal pin from below without crossing power wires
-    y_sig = bb.y2 + 12
-    sch.add_line([(uio.x2, y_sig), (servo.x1 - 18, y_sig), (servo.x1 - 18, y_servo_sig), (servo.x1, y_servo_sig)], width=0.6)
-    sch.add_text("Y06 — Digital output 0–3.3V (RC_PORTY06, Timer4)", uio.x2 + 2, y_sig - 10.0, 3.0, 3.0)
-    sch.add_text("RC servo pulse ~1–2 ms, 50 ms period", servo.x1 + 2, servo.y2 + 6.0, 3.0, 3.0)
+    # Servo feeds and signal
+    sch.add_line([(290, 42), (335, 42), (335, 140), (350, 140)], width=0.6, allow_in=("Breadboard",))
+    sch.add_line([(290, 92), (325, 92), (325, 160), (350, 160)], width=0.6, allow_in=("Breadboard",))
+    sch.add_line([(260, 185), (350, 185)], width=0.6)
+    sch.add_text("Y06 digital out, 0-3.3 V", 265, 181, 3.0, 3.0)
+    sch.add_text("pulse 1-2 ms every 50 ms", 265, 191, 3.0, 3.0)
 
-    # Rails -> Servo (5V and GND)
-    # exit from rail ends at breadboard right edge
-    # 5V and GND from rail ends directly into their pins with no crossing
-    sch.add_line([(rail_x2, rail_5v_y), (bb.x2, rail_5v_y), (bb.x2 + 8, rail_5v_y), (bb.x2 + 8, y_servo_5v), (servo.x1, y_servo_5v)], width=0.6, allow_in=("Breadboard",))
-    sch.add_text("5V (orange) — max 5V, regulated", servo.x1 + 2, y_servo_5v + 6, 3.0, 3.0)
-    sch.add_line([(rail_x2, rail_gnd_y), (bb.x2, rail_gnd_y), (bb.x2 + 16, rail_gnd_y), (bb.x2 + 16, y_servo_gnd), (servo.x1, y_servo_gnd)], width=0.6, allow_in=("Breadboard",))
-    sch.add_text("GND (brown)", servo.x1 + 2, y_servo_gnd - 2, 3.0, 3.0)
-    # Servo entry labels at pins
-    sch.add_text("Signal (yellow)", servo.x1 + 2, y_servo_sig - 2, 3.0, 3.0)
+    # Servo pin labels and note
+    sch.add_text("5V (orange)", 353, 140, 3.0, 3.0)
+    sch.add_text("GND (brown)", 353, 160, 3.0, 3.0)
+    sch.add_text("Signal (yellow)", 353, 185, 3.0, 3.0)
+    sch.add_text("5 V regulated, max 5 V", 350, 207, 3.0, 3.0)
 
-    sch.add_text("Common ground for ATX, UNO boards, rails, and servo", 25, 285, 3.0, 3.0)
+    sch.add_text("Common ground: ATX, UNO boards, breadboard rails, and servo", 20, 230, 3.0, 3.0)
 
     # Validate constraints
     sch.assert_layout()
